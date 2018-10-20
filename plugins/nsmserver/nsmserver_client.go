@@ -57,7 +57,7 @@ import (
 
 const (
 	// nseConnectionTimeout defines a timoute for NSM to succeed connection to NSE (seconds)
-	nseConnectionTimeout = 15 * time.Second
+	nseConnectionTimeout = 240 * time.Second
 )
 
 type nsmClientEndpoints struct {
@@ -253,8 +253,7 @@ func (n *nsmClientEndpoints) RequestConnection(ctx context.Context, cr *nsmconne
 		return &nsmconnect.ConnectionReply{
 			Accepted: true,
 			ConnectionParameters: &nsmconnect.ConnectionParameters{
-				// Passing connection parameters which were populated by the dataplane
-				ConnectionParameters: connection.LocalSource.Parameters,
+				ConnectionParameters: connection.Destination.(*dataplane.Connection_Local).Local.Parameters,
 			},
 		}, nil
 	}
@@ -279,14 +278,13 @@ func localNSE(n *nsmClientEndpoints, requestID, networkServiceName string) (*dat
 	nseCtx, nseCancel := context.WithTimeout(context.Background(), nseConnectionTimeout)
 	defer nseCancel()
 	nseEndpointConnectionReply, err := nseClient.RequestEndpointConnection(nseCtx, &nseconnect.EndpointConnectionRequest{
-		RequestId: requestID,
+		RequestId:          requestID,
+		NetworkServiceName: networkServiceName,
 	})
 	if err != nil {
 		return nil, err
 	}
 	n.logger.Infof("successfuly received information from NSE: %s", nseEndpointConnectionReply.RequestId)
-
-	// TODO (sbezverk) It must be refactor as soon as possible to call dataplane interface
 
 	// podName1/podNamespace1 represents nsm client requesting access to a network service
 	nsmClientPodName, err := getPodNameByUID(n.k8sClient, requestID, n.namespace)

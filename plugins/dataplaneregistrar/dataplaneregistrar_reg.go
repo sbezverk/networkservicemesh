@@ -95,7 +95,6 @@ func dataplaneMonitor(objStore objectstore.Interface, dataplaneName string, logg
 // no re-registration is required. Detection a failure on this "channel" will mean
 // that NSM is gone and the dataplane needs to start re-registration logic.
 func (r *dataplaneRegistrarServer) RequestLiveness(liveness dataplaneregistrarapi.DataplaneRegistration_RequestLivenessServer) error {
-	r.logger.Infof("Liveness Request received")
 	for {
 		if err := liveness.SendMsg(&common.Empty{}); err != nil {
 			r.logger.Errorf("deteced error %s, grpc code: %+v on grpc channel", err.Error(), status.Convert(err).Code())

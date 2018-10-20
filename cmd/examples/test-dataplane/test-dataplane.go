@@ -331,11 +331,37 @@ func deleteVethInterface(ns netns.NsHandle, interfacePrefix string) error {
 }
 
 func setVethPair(ns1, ns2 netns.NsHandle, p1, p2 string) ([]string, error) {
-	ns, err := netns.Get()
+	logrus.Infof("Debug: called setVethPair with names: %s %s and namespaces: %+v %+v", p1, p2, ns1, ns2)
+	var err error
+	dataplaneNS, err := netns.Get()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current process namespace")
 	}
-	defer netns.Set(ns)
+	defer netns.Set(dataplaneNS)
+
+	// probing each namespace
+	if err := netns.Set(ns1); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", ns1, err)
+	}
+	// double check if still nsmclient interfaces are listed
+	clientNS, _ := netns.Get()
+
+	if err := netns.Set(ns2); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", ns1, err)
+	}
+	// double check if still nsmclient interfaces are listed
+	nseNS, _ := netns.Get()
+
+	//	logrus.Infof("Debug: Now current namespace: %+v", clientNS)
+	// dataplane pod interfaces
+	//	logrus.Info("Dataplane pod interfaces:")
+	//	listInterfaces(dataplaneNS)
+	// nsmclient pod interfaces
+	//	logrus.Info("nsmclient pod interfaces:")
+	//	listInterfaces(clientNS)
+	// nse pod interfaces
+	//	logrus.Infof("nse pod interfaces:")
+	//	listInterfaces(nseNS)
 
 	linkAttr := netlink.NewLinkAttrs()
 	linkAttr.Name = p2
@@ -343,76 +369,159 @@ func setVethPair(ns1, ns2 netns.NsHandle, p1, p2 string) ([]string, error) {
 		LinkAttrs: linkAttr,
 		PeerName:  p1,
 	}
-	if err := netns.Set(ns1); err != nil {
-		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", ns1, err)
-	}
-	namespaceHandle, err := netlink.NewHandleAt(ns1)
+
+	// nsmclient pod interfaces
+	//	logrus.Info("Should see nsmclient pod interfaces:")
+	//	listInterfaces(clientNS)
+
+	namespaceHandle, err := netlink.NewHandleAt(clientNS)
 	if err != nil {
 		return nil, fmt.Errorf("failure to get pod's handle with error: %+v", err)
 	}
 	// Debugging situation when we try to add already existing link
 	links, err := namespaceHandle.LinkList()
 	if err != nil {
-		logrus.Errorf("failure to get a list of links from the namespace %s with error: %+v", ns1.String(), err)
-		return nil, fmt.Errorf("failure to get a list of links from the namespace %s with error: %+v", ns1.String(), err)
+		return nil, fmt.Errorf("failure to get a list of links from the namespace %s with error: %+v", clientNS.String(), err)
 	}
-	logrus.Printf("Found already existing interfaces:")
+	var clientLink, nseLink netlink.Link
+	//	logrus.Printf("Found already existing interfaces:")
 	found := false
-	for _, link := range links {
-		addrs, err := namespaceHandle.AddrList(link, 0)
-		if err != nil {
-			logrus.Printf("failed to addresses for interface: %s with error: %v", link.Attrs().Name, err)
-		}
-		logrus.Printf("Name: %s Type: %s Addresses: %+v", link.Attrs().Name, link.Type(), addrs)
+	for _, clientLink = range links {
+		//		addrs, err := namespaceHandle.AddrList(clientLink, 0)
+		//		if err != nil {
+		//			logrus.Printf("failed to addresses for interface: %s with error: %v", clientLink.Attrs().Name, err)
+		//			continue
+		//		}
+		//		logrus.Printf("Name: %s Type: %s Addresses: %+v", clientLink.Attrs().Name, clientLink.Type(), addrs)
 		// Check if there is already interface with the same name, if there is, then skip crreating it
-		if link.Attrs().Name == veth.LinkAttrs.Name {
+		if clientLink.Attrs().Name == veth.LinkAttrs.Name {
 			logrus.Printf("Interface with %s already exist, skip creating it.", veth.LinkAttrs.Name)
 			found = true
 		}
 	}
+
 	if !found {
+		//		logrus.Infof("Debug: interface %s has not been found, attempting to create it...", veth.LinkAttrs.Name)
 		// Interface has not been found, safe to create it.
-		if err := namespaceHandle.LinkAdd(veth); err != nil {
+		if err = namespaceHandle.LinkAdd(veth); err != nil {
 			return nil, fmt.Errorf("failure to add veth to pod with error: %+v", err)
 		}
-		// Adding a small timeout to let interface add to complete
-		time.Sleep(30 * time.Second)
+		// Adding function to wait for both ends of veth interface to appear or time out.
+		nseLink, err = waitForInterface(namespaceHandle, p1)
+		if err != nil {
+			return nil, fmt.Errorf("failure waiting for the interface to appear in the namespace")
+		}
+		clientLink, err = waitForInterface(namespaceHandle, p2)
+		if err != nil {
+			return nil, fmt.Errorf("failure waiting for the interface to appear in the namespace")
+		}
 	}
 
-	link, err := netlink.LinkByName(p2)
-	if err != nil {
-		return nil, fmt.Errorf("failure to get pod's interface by name with error: %+v", err)
+	if err := netns.Set(clientNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
 	}
-	if _, ok := link.(*netlink.Veth); !ok {
-		return nil, fmt.Errorf("failure, got unexpected interface type: %+v", reflect.TypeOf(link))
+	// nsmclient pod interfaces
+	//	logrus.Info("Should see nsmclient pod interfaces and two ends of new veth interface:")
+	//	listInterfaces(clientNS)
+
+	if err := netns.Set(clientNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
 	}
-	if err := netlink.LinkSetUp(link); err != nil {
-		return nil, fmt.Errorf("failure setting link %s up with error: %+v", link.Attrs().Name, err)
+	//	tmpNS, _ := netns.Get()
+	//	logrus.Info("Should see the same as above:")
+	//	listInterfaces(tmpNS)
+
+	// if err := netns.Set(clientNS); err != nil {
+	//	return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
+	// }
+	if err := netlink.LinkSetUp(clientLink); err != nil {
+		return nil, fmt.Errorf("failure setting link %s up with error: %+v", clientLink.Attrs().Name, err)
 	}
-	peer, err := netlink.LinkByName(p1)
-	if err != nil {
-		return nil, fmt.Errorf("failure to get pod's interface by name with error: %+v", err)
+
+	if err := netns.Set(clientNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
 	}
-	if _, ok := peer.(*netlink.Veth); !ok {
-		return nil, fmt.Errorf("failure, got unexpected interface type: %+v", reflect.TypeOf(link))
+	// nsmclient pod interfaces
+	//	logrus.Info("Should see nsmclient pod interfaces and two ends of new veth interface:")
+	//	listInterfaces(clientNS)
+
+	if err := moveLinkIntoNS(nseLink, nseNS); err != nil {
+		return nil, fmt.Errorf("failure to place veth into peer's pod namespace with error: %+v", err)
 	}
-	// Moving peer's interface into peer's namespace
-	if err := netlink.LinkSetNsFd(peer, int(ns2)); err != nil {
-		return nil, fmt.Errorf("failure to get place veth into peer's pod with error: %+v", err)
-	}
+	// nsmclient pod interfaces
+	//	logrus.Info("Should see nsmclient pod interfaces and 1 end of new veth interface:")
+	//	listInterfaces(clientNS)
+
 	// Switching to peer's namespace
-	if err := netns.Set(ns2); err != nil {
-		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", ns2, err)
+	if err := netns.Set(nseNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", nseNS, err)
 	}
-	peer, err = netlink.LinkByName(p1)
+	//	logrus.Infof("Debug: Now current namespace: %+v", nseNS)
+
+	// nse pod interfaces
+	//	logrus.Info("Should see nse pod interfaces and 1 end of new veth interface:")
+	//	listInterfaces(nseNS)
+
+	namespaceHandle, err = netlink.NewHandleAt(nseNS)
+	if err != nil {
+		return nil, fmt.Errorf("failure to get pod's handle with error: %+v", err)
+	}
+	if err := netns.Set(nseNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
+	}
+	_, err = waitForInterface(namespaceHandle, p1)
 	if err != nil {
 		return nil, fmt.Errorf("failure to get pod's interface by name with error: %+v", err)
 	}
-	if err := netlink.LinkSetUp(peer); err != nil {
-		return nil, fmt.Errorf("failure setting link %s up with error: %+v", peer.Attrs().Name, err)
+	if err := netns.Set(nseNS); err != nil {
+		return nil, fmt.Errorf("failed to switch to namespace %s with error: %+v", clientNS, err)
 	}
-
+	if err := netlink.LinkSetUp(nseLink); err != nil {
+		return nil, fmt.Errorf("failure setting link %s up with error: %+v", nseLink.Attrs().Name, err)
+	}
+	//	logrus.Info("Debug: netlink.LinkSetUp(peer)")
 	return []string{p1, p2}, nil
+}
+
+func moveLinkIntoNS(peer netlink.Link, ns netns.NsHandle) error {
+	ticker := time.NewTicker(time.Second * 5)
+	timeout := time.NewTimer(time.Second * 60)
+	var err error
+	for {
+		select {
+		case <-ticker.C:
+			if err = netlink.LinkSetNsFd(peer, int(ns)); err != nil {
+				logrus.Errorf("attempt to move interface %s into namespace %+v failed with error: %+v, retrying...", peer.Attrs().Name, ns, err)
+				continue
+			}
+			return nil
+		case <-timeout.C:
+			return fmt.Errorf("failure to place veth into peer's pod namespace with error: %+v", err)
+		}
+	}
+}
+
+func waitForInterface(namespaceHandle *netlink.Handle, interfaceName string) (netlink.Link, error) {
+	// logrus.Infof("Debug: called waitForInterface for interface %s", interfaceName)
+	ticker := time.NewTicker(time.Second * 5)
+	timeout := time.NewTimer(time.Second * 60)
+	for {
+		select {
+		case <-ticker.C:
+			// logrus.Info("Debug: Attempting to find created interface")
+			links, _ := namespaceHandle.LinkList()
+			for _, link := range links {
+				// logrus.Infof("Debug: Comparing target interface %s with %s", interfaceName, link.Attrs().Name)
+				if link.Attrs().Name == interfaceName {
+					// logrus.Info("Debug: Interface found")
+					return link, nil
+				}
+			}
+		case <-timeout.C:
+			// logrus.Info("Debug: Timeout waiting for the target interface to appear")
+			return nil, fmt.Errorf("timeout waiting for the interface")
+		}
+	}
 }
 
 func setVethAddr(ns1, ns2 netns.NsHandle, p1, p2 string) error {
@@ -527,7 +636,7 @@ func main() {
 			continue
 		}
 		defer conn.Close()
-		logrus.Infof("DEBUG test-dataplane: connection to dataplane registrar socket % succeeded.", registrarSocket)
+		logrus.Infof("DEBUG test-dataplane: connection to dataplane registrar socket %s succeeded.", registrarSocket)
 
 		registrarConnection := dataplaneregistrarapi.NewDataplaneRegistrationClient(conn)
 		dataplane := dataplaneregistrarapi.DataplaneRegistrationRequest{
@@ -589,7 +698,7 @@ func connectPods(k8s *kubernetes.Clientset, podName1, podName2, namespace1, name
 
 	interfaces, err := setVethPair(ns1, ns2, podName1, podName2)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get add veth pair to pods %s/%s and %s/%s with error: %+v",
+		return nil, fmt.Errorf("Failed to add veth interfaces to pods %s/%s and %s/%s with error: %+v",
 			namespace1, podName1, namespace2, podName2, err)
 	}
 
@@ -607,12 +716,12 @@ func connectPods(k8s *kubernetes.Clientset, podName1, podName2, namespace1, name
 	connection := dataplaneapi.Connection{
 		LocalSource: &common.LocalMechanism{
 			Type:       common.LocalMechanismType_KERNEL_INTERFACE,
-			Parameters: map[string]string{"clientlocalmechanism": interfaces[0]},
+			Parameters: map[string]string{"nselocalmechanism": interfaces[0]},
 		},
 		Destination: &dataplaneapi.Connection_Local{
 			Local: &common.LocalMechanism{
 				Type:       common.LocalMechanismType_KERNEL_INTERFACE,
-				Parameters: map[string]string{"nselocalmechanism": interfaces[1]},
+				Parameters: map[string]string{"clientlocalmechanism": interfaces[1]},
 			},
 		},
 	}

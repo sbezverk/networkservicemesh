@@ -112,22 +112,21 @@ func cleanUpNSMClient(plugin *Plugin, pod *v1.Pod) {
 	plugin.Log.Infof("attempting cleanup nsm pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 	ticker := time.NewTicker(60 * time.Second)
 	for {
+		if err := dataplaneutils.CleanupPodDataplane(pod.ObjectMeta.Name, pod.ObjectMeta.Namespace, testdataplane.NSMPodType_NSMCLIENT); err != nil {
+			// NSM pod is about to be deleted as such there is no reason to fail, even if
+			// dataplane cleanup failed, simply print an error message is sufficient
+			plugin.Log.Errorf("failed to clean up pod %s/%s dataplane with error: %+v, please review dataplane controller log if further debugging is required",
+				pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
+		}
+		plugin.Log.Infof("successfully removed dataplane from NSM pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+		if err := finalizerutils.RemovePodFinalizer(plugin.k8sClient, pod.ObjectMeta.Name, pod.ObjectMeta.Namespace, NSMFinalizer); err != nil {
+			plugin.Log.Warnf("fail to remove finalizers from NSM pod %s/%s with error: %+v", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
+		} else {
+			plugin.Log.Infof("successfully removed finalizers from NSM pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+			return
+		}
 		select {
 		case <-ticker.C:
-			if err := dataplaneutils.CleanupPodDataplane(pod.ObjectMeta.Name, pod.ObjectMeta.Namespace, testdataplane.NSMPodType_NSMCLIENT); err != nil {
-				// NSM pod is about to be deleted as such there is no reason to fail, even if
-				// dataplane cleanup failed, simply print an error message is sufficient
-				plugin.Log.Errorf("failed to clean up pod %s/%s dataplane with error: %+v, please review dataplane controller log if further debugging is required",
-					pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
-			}
-			plugin.Log.Infof("successfully removed dataplane from NSM pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
-			if err := finalizerutils.RemovePodFinalizer(plugin.k8sClient, pod.ObjectMeta.Name, pod.ObjectMeta.Namespace, NSMFinalizer); err != nil {
-				plugin.Log.Warnf("fail to remove finalizers from NSM pod %s/%s with error: %+v", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
-				continue
-			} else {
-				plugin.Log.Infof("successfully removed finalizers from NSM pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
-			}
-			return
 		}
 	}
 }

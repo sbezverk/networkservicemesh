@@ -111,6 +111,11 @@ func setupInformer(plugin *Plugin) {
 				newPod := newObj.(*v1.Pod)
 				// This condition should be triggered only once when pod delete operation is initiated.
 				if oldPod.ObjectMeta.DeletionTimestamp == nil && newPod.ObjectMeta.DeletionTimestamp != nil {
+					plugin.Log.Infof("Condition was detected for pod: %s/%s when old pod's timestamp is: %+v but new pod timestamp is: %+v",
+						newPod.ObjectMeta.Namespace,
+						newPod.ObjectMeta.Name,
+						oldPod.ObjectMeta.DeletionTimestamp,
+						newPod.ObjectMeta.DeletionTimestamp)
 					plugin.CleanUp(newPod)
 				}
 			},

@@ -43,7 +43,7 @@ import (
 
 const (
 	// clientConnectionTimeout defines time the client waits for establishing connection with the server
-	clientConnectionTimeout = time.Second * 60
+	clientConnectionTimeout = time.Second * 240
 	// clientConnectionTimeout defines retry interval for establishing connection with the server
 	clientConnectionRetry = time.Second * 2
 )

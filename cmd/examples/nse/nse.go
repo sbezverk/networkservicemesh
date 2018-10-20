@@ -47,7 +47,7 @@ const (
 
 	// NSMkeyNSELocalMechanism defines a key for nse local interface
 	// TODO (sbezverk) must be known globally
-	NSMkeyNSELocalMechanism = "nselocalmechansim"
+	NSMkeyNSELocalMechanism = "nselocalmechanism"
 )
 
 var (
@@ -62,6 +62,8 @@ type nseConnection struct {
 
 func (n nseConnection) RequestEndpointConnection(ctx context.Context, req *nseconnect.EndpointConnectionRequest) (*nseconnect.EndpointConnectionReply, error) {
 
+	logrus.Infof("Received RequestEndpointConnection for id: %s Network Service: %s", req.RequestId, req.NetworkServiceName)
+
 	return &nseconnect.EndpointConnectionReply{
 		RequestId:          n.podUID,
 		NetworkServiceName: n.networkServiceName,
@@ -70,6 +72,8 @@ func (n nseConnection) RequestEndpointConnection(ctx context.Context, req *nseco
 }
 
 func (n nseConnection) SendEndpointConnectionMechanism(ctx context.Context, req *nseconnect.EndpointConnectionMechanism) (*nseconnect.EndpointConnectionMechanismReply, error) {
+
+	logrus.Infof("Received SendEndpointConnectionMechanism for id: %s Network Service: %s local mechanism: %+v", req.RequestId, req.NetworkServiceName, req.LocalMechanism)
 
 	interfaceName, ok := req.LocalMechanism.Parameters[NSMkeyNSELocalMechanism]
 	if !ok {
@@ -91,7 +95,9 @@ func (n nseConnection) SendEndpointConnectionMechanism(ctx context.Context, req 
 	}
 
 	// Checking if the interface created by NSM/Dataplane is found in the list
+	logrus.Info("List of interfaces:")
 	for _, intfs := range interfaces {
+		logrus.Infof("- %s", strings.ToLower(intfs.Name))
 		if strings.ToLower(intfs.Name) == strings.ToLower(interfaceName) {
 			return &nseconnect.EndpointConnectionMechanismReply{
 				RequestId:      req.RequestId,
